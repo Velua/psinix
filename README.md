@@ -4,50 +4,7 @@ Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed 
 
 Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
 
-## Prerequisites (local machine only)
-
-These tools run on **your admin laptop/desktop**, not on the server. The remote host never needs the `sops` CLI: `sops-nix` decrypts at activation using the machine’s SSH host key.
-
-| Tool | Why | Install |
-|------|-----|---------|
-| [Nix](https://nixos.org/download/) with flakes | Build and deploy the flake | System-wide Nix install |
-| `sops` | Edit / encrypt `secrets.yaml` | See [Installing SOPS](#installing-sops) |
-| `age` | Generate your admin identity | Bundled with the same options as SOPS |
-| `ssh-to-age` | Convert the server’s SSH host key → age public key | Ephemeral: `nix shell nixpkgs#ssh-to-age` |
-| `nixos-anywhere` | First-time install over SSH | Ephemeral: `nix run github:nix-community/nixos-anywhere -- ...` |
-| `nixos-rebuild` | Later updates | Comes with NixOS; on non-NixOS: `nix shell nixpkgs#nixos-rebuild` |
-
-Optional one-shots already shown as `nix run nixpkgs#…` below (`openssl`, `caddy`) do not need a permanent install.
-
-### Installing SOPS
-
-**You do not install SOPS on the target host.** Only the admin machine needs it, whenever you create or change secrets.
-
-Pick one approach:
-
-1. **Ephemeral (recommended if you rarely touch secrets)** — no global install:
-
-   ```bash
-   nix shell nixpkgs#sops nixpkgs#age
-   # then run sops / age in that shell
-   ```
-
-2. **User or system package (convenient if you edit secrets often)** — e.g. on NixOS:
-
-   ```nix
-   environment.systemPackages = [ pkgs.sops pkgs.age ];
-   # or home-manager: home.packages = [ pkgs.sops pkgs.age ];
-   ```
-
-   Non-NixOS: install from your distro or [sops releases](https://github.com/getsops/sops/releases). Any recent 3.x is fine.
-
-SOPS finds your private age key automatically at:
-
-```text
-~/.config/sops/age/keys.txt
-```
-
-That path is **user-global** (one identity for all your SOPS repos), not project-local. The **project** only stores public keys in `.sops.yaml` (safe to commit).
+You only need [Nix](https://nixos.org/download/) with flakes on your admin machine. Everything else in this guide is `nix run` / `nix shell` (no permanent `sops`/`age` install). The server never needs the `sops` CLI.
 
 ## Before you deploy (fill these in)
 
@@ -88,15 +45,13 @@ so the **server’s SSH host private key** is the decrypt identity. Your laptop 
 
 ## One-time: admin age key
 
-On the machine where you will run `sops`:
-
 ```bash
 mkdir -p ~/.config/sops/age
 nix run nixpkgs#age -- keygen -o ~/.config/sops/age/keys.txt
 # prints: Public key: age1...
 ```
 
-Copy that public key into `.sops.yaml` as the `admin` recipient (see below). Keep `keys.txt` private and backed up; without it you cannot edit existing secrets.
+That path is **user-global** (not project-local). Keep `keys.txt` private and backed up. Copy the public key into `.sops.yaml` as `admin` (below). SOPS tools pick it up automatically from there.
 
 ## One-time: project `.sops.yaml`
 
@@ -143,7 +98,7 @@ cloudflare_token: cf_xxx...
 softhsm_pin: PIN_GOES_HERE
 caddy_admin_hash: HASH_GOES_HERE
 EOF
-sops encrypt --in-place secrets.yaml
+nix shell nixpkgs#sops -c sops encrypt --in-place secrets.yaml
 ```
 
 Replace the placeholders with your real values before encrypting.
@@ -151,8 +106,8 @@ Replace the placeholders with your real values before encrypting.
 Later edits (file must already be encrypted and decryptable by your age key):
 
 ```bash
-sops secrets.yaml                                          # interactive
-sops set secrets.yaml '["cloudflare_token"]' '"cf_xxx..."' # single key
+nix shell nixpkgs#sops -c sops secrets.yaml
+nix shell nixpkgs#sops -c sops set secrets.yaml '["cloudflare_token"]' '"cf_xxx..."'
 ```
 
 ## Stage secrets for the flake (required)
@@ -218,23 +173,22 @@ creation_rules:
 Then rekey so the ciphertext includes the new recipient:
 
 ```bash
-sops updatekeys secrets.yaml
+nix shell nixpkgs#sops -c sops updatekeys secrets.yaml
 git add .sops.yaml secrets.yaml   # flake must see the updates
 ```
 
 ### 3. Rebuild (subsequent deploys)
 
 ```bash
+# on NixOS; elsewhere: nix shell nixpkgs#nixos-rebuild -c nixos-rebuild ...
 nixos-rebuild switch --flake .#generic --target-host "root@**IPV4**" --show-trace
 ```
 
 ## Day-2 secret changes
 
-1. Edit with `sops` / `sops set` on your admin machine (same as above).
-2. Commit the updated `secrets.yaml` if you track it in git.
+1. Edit with `nix shell nixpkgs#sops -c sops …` on your admin machine (same as above).
+2. Stage/commit the updated `secrets.yaml`.
 3. `nixos-rebuild switch ...` so the host picks up new ciphertext.
-
-No SOPS install on the server is required for this.
 
 ## What runs where
 
