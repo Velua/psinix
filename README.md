@@ -30,7 +30,7 @@ Then create `.sops.yaml` and `secrets.yaml` as below (this repo ships placeholde
 |--------|---------|----------------|
 | `cloudflare_token` | Caddy DNS-01 TLS + ddclient | Cloudflare API token with **Edit zone DNS** |
 | `softhsm_pin` | SoftHSM unlock for psibase | Random string you generate |
-| `caddy_admin_hash` | HTTP basic auth on `x-*` admin hosts | `caddy hash-password` |
+| `caddy_admin_hash` | HTTP basic auth on `x-*` admin hosts | bcrypt hash of a password **you choose** (via `caddy hash-password`) |
 
 Encrypted file: `secrets.yaml` (must be git-staged/committed — see below).  
 Rules + recipients: `.sops.yaml` (copy from `.sops.yaml.example`, stage/commit — public keys only).
@@ -88,7 +88,7 @@ Gather values first:
 |--------|----------------|
 | `cloudflare_token` | Cloudflare API token with **Zone → DNS → Edit** |
 | `softhsm_pin` | e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
-| `caddy_admin_hash` | `nix run nixpkgs#caddy -- hash-password` |
+| `caddy_admin_hash` | `nix run nixpkgs#caddy -- hash-password` — when prompted, enter a new password of your own choosing; store the printed hash |
 
 Create the file in plaintext, then encrypt in place (works even when `secrets.yaml` does not exist yet):
 
