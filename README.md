@@ -4,9 +4,16 @@ Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed 
 
 Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
 
-You only need [Nix](https://nixos.org/download/) with flakes on your admin machine. Everything else in this guide is `nix run` / `nix shell` (no permanent `sops`/`age` install). The server never needs the `sops` CLI.
+This guide is a walkthrough: do the steps in order, top to bottom. Steps 1–5 happen on your admin machine before the first deploy; steps 6–8 are the deploy itself.
 
-## Before you deploy (fill these in)
+## Prerequisites
+
+- [Nix](https://nixos.org/download/) with flakes on your admin machine. Every tool below is invoked with `nix run` / `nix shell` — no permanent `sops`/`age` install needed, and the server never needs the `sops` CLI.
+- A domain with DNS hosted on Cloudflare, and the ability to create an API token with **Zone → DNS → Edit**.
+- A target server you can SSH into that is running a live/installer image (the examples assume an Ubuntu image, hence `ubuntu@`; adjust the user if yours differs).
+- `disk-config.nix` assumes the first disk is `/dev/xvda` (typical cloud/Xen). Change it if your host differs (e.g. `/dev/nvme0n1` on many AWS Nitro instances).
+
+## Step 1 — Configure `configuration.nix`
 
 Edit the `let` block at the top of `configuration.nix`:
 
@@ -16,81 +23,59 @@ Edit the `let` block at the top of `configuration.nix`:
 | `cloudFlareEmail` | Cloudflare account email (ACME) |
 | `localSshKey` | Your laptop SSH **public** key (`~/.ssh/id_ed25519.pub`) |
 
-Then create `.sops.yaml` and `secrets.yaml` as below (this repo ships placeholders only — no real secrets).
+## Step 2 — Create your admin age key (one-time)
 
-## Assumptions
-
-- `disk-config.nix` uses the first disk as `/dev/xvda` (typical cloud/Xen). Change if your host differs (e.g. `/dev/nvme0n1` on many AWS Nitro instances).
-- Initial deploy examples use `ubuntu@` as the installer SSH user. Change the user if the target image is not Ubuntu.
-- A domain name + DNS by Cloudflare with an **Edit zone** token.
-
-## Secrets overview
-
-| Secret | Used by | How to obtain |
-|--------|---------|----------------|
-| `cloudflare_token` | Caddy DNS-01 TLS + ddclient | Cloudflare API token with **Edit zone DNS** |
-| `softhsm_pin` | SoftHSM unlock for psibase | Random string you generate |
-| `caddy_admin_hash` | HTTP basic auth on `x-*` admin hosts | bcrypt hash of a password **you choose** (via `caddy hash-password`) |
-
-Encrypted file: `secrets.yaml` (must be git-staged/committed — see below).  
-Rules + recipients: `.sops.yaml` (copy from `.sops.yaml.example`, stage/commit — public keys only).
-
-On the host, sops-nix uses:
-
-```nix
-sops.age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
-```
-
-so the **server’s SSH host private key** is the decrypt identity. Your laptop uses the **admin age private key** in `~/.config/sops/age/keys.txt`.
-
-## One-time: admin age key
+This key is what lets *you* encrypt and later edit the secrets file. It lives at a **user-global** path (not project-local), so you only ever do this once per machine:
 
 ```bash
 mkdir -p ~/.config/sops/age
-nix run nixpkgs#age -- keygen -o ~/.config/sops/age/keys.txt
+nix shell nixpkgs#age -c age-keygen -o ~/.config/sops/age/keys.txt
 # prints: Public key: age1...
 ```
 
-That path is **user-global** (not project-local). Keep `keys.txt` private and backed up. Copy the public key into `.sops.yaml` as `admin` (below). SOPS tools pick it up automatically from there.
+Keep `keys.txt` private and backed up — it is required for every future edit or rekey of the secrets. Never commit it. Copy the printed **public** key; you'll paste it into `.sops.yaml` in the next step. SOPS tools find the private key at this path automatically.
 
-## One-time: project `.sops.yaml`
+## Step 3 — Create the project `.sops.yaml`
+
+`.sops.yaml` tells SOPS *who* can decrypt `secrets.yaml`. It contains **public keys only**, so it is safe to commit. There will eventually be two recipients:
+
+- `admin` — your key from Step 2, so you can edit secrets.
+- `host` — derived from the server's SSH host key, so the server can decrypt at boot. **You can't know this key yet**: the server only generates its SSH host key when NixOS first boots. So for now, start with `admin` only and leave `host` commented out — you'll return to this file in Step 7.
 
 ```bash
 cp .sops.yaml.example .sops.yaml
 ```
 
-Edit keys (public age keys only). **Start with admin only** — leave `host` commented until after the first NixOS boot (you need the server’s host key for `ssh-to-age`):
+Then edit it, pasting your public key from Step 2:
 
 ```yaml
 # admin: your local age key (age-keygen → ~/.config/sops/age/keys.txt)
 # host:  from the server after first boot:
 #          ssh-keyscan -t ed25519 HOST | ssh-to-age
 keys:
-  - &admin age1...   # from age-keygen
-  # - &host  age1...   # uncomment after ssh-to-age
+  - &admin age1...   # from age-keygen (Step 2)
+  # - &host  age1...   # uncomment in Step 7
 creation_rules:
   - path_regex: secrets\.yaml$
     key_groups:
       - age:
           - *admin
-          # - *host   # uncomment together with &host
+          # - *host   # uncomment in Step 7
 ```
 
-Do **not** put your private age key in the repo. Stage `.sops.yaml` with the secrets file (see [Stage secrets for the flake](#stage-secrets-for-the-flake-required)).
+## Step 4 — Create and encrypt `secrets.yaml`
 
-## Fill in secrets (before or after first deploy)
+Three secrets are needed. Gather the values first:
 
-You need at least the admin public key in `.sops.yaml`. Encrypt only uses the recipients in that file; your private key in `~/.config/sops/age/keys.txt` is required later to edit or rekey.
+| Secret | Used by | How to obtain |
+|--------|---------|----------------|
+| `cloudflare_token` | Caddy DNS-01 TLS + ddclient | Cloudflare API token with **Zone → DNS → Edit** |
+| `softhsm_pin` | SoftHSM unlock for psibase | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
+| `caddy_admin_hash` | HTTP basic auth on `x-*` admin hosts | `nix run nixpkgs#caddy -- hash-password` — see note below |
 
-Gather values first:
+> **Note on `caddy_admin_hash`:** `caddy hash-password` does not generate a password for you — it prompts you to type one in. Pick (and save, e.g. in your password manager) any strong password **of your own choosing**; that password is what you'll enter at the basic-auth prompt on the `x-*` admin subdomains (username `admin`). Only the resulting bcrypt hash goes into `secrets.yaml`.
 
-| Secret | How to obtain |
-|--------|----------------|
-| `cloudflare_token` | Cloudflare API token with **Zone → DNS → Edit** |
-| `softhsm_pin` | e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
-| `caddy_admin_hash` | `nix run nixpkgs#caddy -- hash-password` — when prompted, enter a new password of your own choosing; store the printed hash |
-
-Create the file in plaintext, then encrypt in place (works even when `secrets.yaml` does not exist yet):
+Create the file in plaintext with your real values, then encrypt it in place (encryption uses the recipients in `.sops.yaml` — currently just `admin`):
 
 ```bash
 cat > secrets.yaml <<'EOF'
@@ -101,16 +86,14 @@ EOF
 nix shell nixpkgs#sops -c sops encrypt --in-place secrets.yaml
 ```
 
-Replace the placeholders with your real values before encrypting.
-
-Later edits (file must already be encrypted and decryptable by your age key):
+To edit later (requires your private key from Step 2):
 
 ```bash
 nix shell nixpkgs#sops -c sops secrets.yaml
 nix shell nixpkgs#sops -c sops set secrets.yaml '["cloudflare_token"]' '"cf_xxx..."'
 ```
 
-## Stage secrets for the flake (required)
+## Step 5 — Stage the files in git (required)
 
 Nix **flakes only see files git knows about**. If `.sops.yaml` or `secrets.yaml` are untracked, evaluate/build/deploy fails with:
 
@@ -118,25 +101,22 @@ Nix **flakes only see files git knows about**. If `.sops.yaml` or `secrets.yaml`
 error: Path 'secrets.yaml' in the repository "…" is not tracked by Git.
 ```
 
-After creating or changing them, **stage** (a commit is optional but recommended):
+So after creating or changing them, stage them:
 
 ```bash
 git add .sops.yaml secrets.yaml
 git status   # both should be staged or already tracked — not under "Untracked files"
 ```
 
-You can deploy with only a `git add` (dirty tree is fine; Nix will warn). Committing is still a good idea so the next clone has the encrypted secrets and public age recipients:
+A `git add` alone is enough to deploy (a dirty tree is fine; Nix will warn). Committing is still a good idea so the next clone has the encrypted secrets and public recipients:
 
 ```bash
-git add .sops.yaml secrets.yaml
 git commit -m "Add sops recipients and encrypted secrets"
 ```
 
-Do **not** commit `~/.config/sops/age/keys.txt` (private key). Encrypted `secrets.yaml` and public keys in `.sops.yaml` are safe to commit.
+Safe to commit: encrypted `secrets.yaml`, public keys in `.sops.yaml`. Never commit: `~/.config/sops/age/keys.txt` (your private key).
 
-## Deployment
-
-### 1. Initial install (nixos-anywhere)
+## Step 6 — Initial install (nixos-anywhere)
 
 ```bash
 nix run github:nix-community/nixos-anywhere -- \
@@ -145,22 +125,24 @@ nix run github:nix-community/nixos-anywhere -- \
   --target-host ubuntu@**IPV4**
 ```
 
-After this, the machine boots NixOS with a new SSH host key. Root login uses the public key in `configuration.nix` (`localSshKey`).
+After this, the machine boots NixOS with a freshly generated SSH host key. Root login uses the public key you set in `configuration.nix` (`localSshKey`).
 
-**Chicken-and-egg:** until the host age recipient is in `.sops.yaml` and secrets are re-encrypted for it, sops-nix cannot decrypt on the server. Do the next step before expecting Cloudflare/Caddy/SoftHSM secrets to work, then rebuild.
+**Expect secrets to be broken at this point.** The server decrypts `secrets.yaml` with its SSH host key (that's the `host` recipient from Step 3), but that key didn't exist until just now — so the ciphertext isn't encrypted for it yet. Cloudflare/Caddy/SoftHSM won't work until you complete Steps 7–8.
 
-### 2. Add the host age key and re-encrypt
+## Step 7 — Add the host key as a recipient and re-encrypt
+
+Get the server's host key as an age recipient:
 
 ```bash
 nix shell nixpkgs#openssh nixpkgs#ssh-to-age -c sh -c \
   'ssh-keyscan -t ed25519 **IPV4** | ssh-to-age'
 ```
 
-In `.sops.yaml`, **uncomment** the `host` lines and paste the printed `age1...` value:
+Back in `.sops.yaml` (from Step 3), **uncomment** the `host` lines and paste the printed `age1...` value:
 
 ```yaml
 keys:
-  - &admin age1...          # already set
+  - &admin age1...          # already set in Step 3
   - &host  age1...          # ← from ssh-to-age
 creation_rules:
   - path_regex: secrets\.yaml$
@@ -170,27 +152,37 @@ creation_rules:
           - *host             # ← uncomment
 ```
 
-Then rekey so the ciphertext includes the new recipient:
+Then rekey the ciphertext so it includes the new recipient, and re-stage (Step 5 rule applies to every change):
 
 ```bash
 nix shell nixpkgs#sops -c sops updatekeys secrets.yaml
-git add .sops.yaml secrets.yaml   # flake must see the updates
+git add .sops.yaml secrets.yaml
 ```
 
-### 3. Rebuild (subsequent deploys)
+## Step 8 — Rebuild (and all subsequent deploys)
 
 ```bash
 # on NixOS; elsewhere: nix shell nixpkgs#nixos-rebuild -c nixos-rebuild ...
 nixos-rebuild switch --flake .#generic --target-host "root@**IPV4**" --show-trace
 ```
 
-## Day-2 secret changes
+The host can now decrypt secrets at activation, and Caddy/ddclient/SoftHSM come up for real.
 
-1. Edit with `nix shell nixpkgs#sops -c sops …` on your admin machine (same as above).
-2. Stage/commit the updated `secrets.yaml`.
-3. `nixos-rebuild switch ...` so the host picks up new ciphertext.
+## Day-2: changing secrets
 
-## What runs where
+1. Edit with `nix shell nixpkgs#sops -c sops secrets.yaml` on your admin machine (Step 4).
+2. Stage/commit the updated `secrets.yaml` (Step 5).
+3. `nixos-rebuild switch ...` so the host picks up the new ciphertext (Step 8).
+
+## Reference: how decryption works
+
+On the host, sops-nix is configured with:
+
+```nix
+sops.age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
+```
+
+so the **server's SSH host private key** is its decrypt identity — no age key ever needs to be copied to the server. Your admin machine uses the **admin age private key** in `~/.config/sops/age/keys.txt`.
 
 ```text
 Admin machine                          Remote NixOS host
