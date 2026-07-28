@@ -8,7 +8,9 @@ This guide is a walkthrough: do the steps in order, top to bottom. Steps 1–5 h
 
 ## Prerequisites
 
-- [Nix](https://nixos.org/download/) with flakes on your admin machine. Every tool below is invoked with `nix run` / `nix shell` — no permanent `sops`/`age` install needed, and the server never needs the `sops` CLI.
+- [Nix](https://nixos.org/download/) with flakes on your admin machine — **NixOS is not required**; any Linux distro (or macOS, see below) with Nix installed works. Every tool below is invoked with `nix run` / `nix shell` — no permanent `sops`/`age` install needed, and the server never needs the `sops` CLI.
+- Your admin machine must be able to build `x86_64-linux` derivations. Any x86_64 Linux machine can. From macOS or an ARM machine, add `--build-on-remote` to the nixos-anywhere command (Step 6) and `--build-host root@**IPV4**` to nixos-rebuild (Step 8), or configure a remote builder.
+- **Windows:** Nix does not run natively, but WSL2 works. Install Nix inside WSL2 and do *everything* there: keep the repo on the WSL filesystem (not `/mnt/c/...`), generate/use the SSH key inside WSL (`~/.ssh/id_ed25519.pub` — that machine is what SSHes to the server), and the age key path in Step 2 refers to the WSL home directory. An x86 laptop under WSL2 counts as `x86_64-linux`, so no remote-build flags are needed.
 - A domain with DNS hosted on Cloudflare, and the ability to create an API token with **Zone → DNS → Edit**.
 - A target server you can SSH into that is running a live/installer image (the examples assume an Ubuntu image, hence `ubuntu@`; adjust the user if yours differs).
 - `disk-config.nix` assumes the first disk is `/dev/xvda` (typical cloud/Xen). Change it if your host differs (e.g. `/dev/nvme0n1` on many AWS Nitro instances).
