@@ -81,6 +81,9 @@ in {
     producer = "a";
     p2p = true;
     databaseCacheSize = "2GiB";
+    # Default psinode timeout is ~4s; push_boot (~9MB) over high-latency paths
+    # needs longer or Caddy gets 502 mid-upload (needgenesis never clears).
+    httpTimeout = 30;
 
     softHsm = {
       enable = true;
