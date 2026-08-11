@@ -268,11 +268,11 @@
         "nixpkgs-nodejs": "nixpkgs-nodejs"
       },
       "locked": {
-        "lastModified": 1785901994,
-        "narHash": "sha256-SJm3Szdh4iMzeogzIE0gOkpJTojncXr96OITTWt8uJo=",
+        "lastModified": 1786419766,
+        "narHash": "sha256-escy7k4UVggnzxWPcTCZJHUr0k8RVykMZNGEhTF5vlI=",
         "owner": "gofractally",
         "repo": "psibase",
-        "rev": "ec1efde7855e3358aa2b37a48accd03191209cc7",
+        "rev": "3342b9667b2aa496e6627e019900e3da7f069e0f",
         "type": "github"
       },
       "original": {
