@@ -41,14 +41,17 @@ in {
       '';
     };
 
-    # bcrypt hash for the x-* admin subdomains (generate with: caddy hash-password)
+    # bcrypt hash for the x-* admin login prompt (generate with: caddy hash-password)
     secrets.caddy_admin_hash = {};
+    # Hex token for the parent-domain session cookie (openssl rand -hex 32).
+    secrets.caddy_session_token = {};
 
     templates.caddy-admin-env = {
       owner = "caddy";
       restartUnits = ["caddy.service"];
       content = ''
         CADDY_ADMIN_HASH=${config.sops.placeholder.caddy_admin_hash}
+        CADDY_SESSION_TOKEN=${config.sops.placeholder.caddy_session_token}
       '';
     };
 
@@ -91,7 +94,8 @@ in {
       tokenLabel = "psibase production SoftHSM";
     };
 
-    # Caddy sets X-Auth-User on x-* after basic auth (Traefik admin-auth equivalent).
+    # Caddy sets X-Auth-User on x-* after the parent-domain session (or the
+    # first basic-auth prompt that issues it). Traefik admin-auth equivalent.
     environment = {
       PSIBASE_USERNAME_FIELD = "X-Auth-User";
     };
@@ -133,10 +137,13 @@ in {
       '';
     };
 
-    # Wildcard: x-* admin apps get basic auth, with the authenticated
-    # username injected as X-Auth-User (Traefik's "admin-auth" headerField;
-    # psinode reads it via PSIBASE_USERNAME_FIELD). Everything else goes
-    # straight to psinode, header stripped.
+    # Wildcard: x-* admin surfaces share one parent-domain session cookie
+    # (set after a single basic-auth prompt). The Peers panel fetches
+    # x-peers with credentials: include; a per-host Authorization header
+    # would not be sent. psinode still authorizes via X-Auth-User.
+    # Not gated here (psinode checks these itself):
+    #   GET x-peers/p2p — node-to-node handshake (checkP2PAuth / --p2p)
+    #   OPTIONS on x-*  — CORS preflight (no credentials)
     virtualHosts."*.${domain}" = {
       extraConfig = ''
         tls {
@@ -145,14 +152,45 @@ in {
         header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 
         @xapps header_regexp xhost Host ^x-[^.]+[.]${domainRe}$
+        @xpeersP2p {
+          host x-peers.${domain}
+          path /p2p
+          method GET
+        }
+        @xpreflight {
+          header_regexp xhost Host ^x-[^.]+[.]${domainRe}$
+          method OPTIONS
+        }
+        @xsession {
+          header_regexp xhost Host ^x-[^.]+[.]${domainRe}$
+          header_regexp Cookie `(?:^|;\s*)psinix_session={$CADDY_SESSION_TOKEN}(?:;|$)`
+        }
+
+        handle @xpeersP2p {
+          reverse_proxy localhost:8090 {
+            header_up -X-Auth-User
+          }
+        }
+
+        handle @xpreflight {
+          reverse_proxy localhost:8090 {
+            header_up -X-Auth-User
+          }
+        }
+
+        handle @xsession {
+          reverse_proxy localhost:8090 {
+            header_up X-Auth-User admin
+          }
+        }
+
         handle @xapps {
-          # Require HTTP basic auth (hash from sops → CADDY_ADMIN_HASH).
-          # Pass the authenticated username to psinode as X-Auth-User.
           basic_auth {
             admin {$CADDY_ADMIN_HASH}
           }
           reverse_proxy localhost:8090 {
             header_up X-Auth-User {http.auth.user.id}
+            header_down +Set-Cookie "psinix_session={$CADDY_SESSION_TOKEN}; Domain=.${domain}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000"
           }
         }
 

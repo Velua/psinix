@@ -2,7 +2,7 @@
 
 Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed to a remote server with [nixos-anywhere](https://github.com/nix-community/nixos-anywhere).
 
-Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
+Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash, Caddy session token) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
 
 This guide is a walkthrough: do the steps in order, top to bottom. Steps 1–5 happen on your admin machine before the first deploy; steps 6–9 cover identifying the disk and the deploy itself.
 
@@ -66,15 +66,18 @@ creation_rules:
 
 ## Step 4 — Create and encrypt `secrets.yaml`
 
-Three secrets are needed. Gather the values first:
+Four secrets are needed. Gather the values first:
 
 | Secret | Used by | How to obtain |
 |--------|---------|----------------|
 | `cloudflare_token` | Caddy DNS-01 TLS + ddclient | Cloudflare API token with **Zone → DNS → Edit** |
 | `softhsm_pin` | SoftHSM unlock for psibase | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
-| `caddy_admin_hash` | HTTP basic auth on `x-*` admin hosts | `nix run nixpkgs#caddy -- hash-password` — see note below |
+| `caddy_admin_hash` | HTTP basic auth login on `x-*` | `nix run nixpkgs#caddy -- hash-password` — see note below |
+| `caddy_session_token` | Parent-domain session cookie for all `x-*` hosts | `nix run nixpkgs#openssl -- rand -hex 32` — hex only; see note below |
 
-> **Note on `caddy_admin_hash`:** `caddy hash-password` does not generate a password for you — it prompts you to type one in. Pick (and save, e.g. in your password manager) any strong password **of your own choosing**; that password is what you'll enter at the basic-auth prompt on the `x-*` admin subdomains (username `admin`). Only the resulting bcrypt hash goes into `secrets.yaml`.
+> **Note on `caddy_admin_hash`:** `caddy hash-password` does not generate a password for you — it prompts you to type one in. Pick (and save, e.g. in your password manager) any strong password **of your own choosing**; that password is what you'll enter at the basic-auth prompt on the first `x-*` visit (username `admin`). Only the resulting bcrypt hash goes into `secrets.yaml`.
+>
+> **Note on `caddy_session_token`:** After that prompt, Caddy sets an `HttpOnly` cookie `psinix_session` on `.{domain}` so the same login applies to every `x-*` host (the Peers panel on `x-admin` calls `x-peers` from the browser). Use `openssl rand -hex 32` — the Caddy matcher treats the value as a regex, so hex keeps it literal. Rotating this token and rebuilding invalidates every existing session.
 
 Create the file in plaintext with your real values, then encrypt it in place (encryption uses the recipients in `.sops.yaml` — currently just `admin`):
 
@@ -83,6 +86,7 @@ cat > secrets.yaml <<'EOF'
 cloudflare_token: cf_xxx...
 softhsm_pin: PIN_GOES_HERE
 caddy_admin_hash: HASH_GOES_HERE
+caddy_session_token: TOKEN_GOES_HERE
 EOF
 nix shell nixpkgs#sops -c sops encrypt --in-place secrets.yaml
 ```
@@ -214,11 +218,30 @@ nixos-rebuild switch --flake .#generic --target-host "root@**IPV4**" --show-trac
 
 The host can now decrypt secrets at activation, and Caddy/ddclient/SoftHSM come up for real.
 
+## Admin login (`x-*`)
+
+Visit `https://x-admin.{domain}`. The browser prompts once for HTTP basic auth (username `admin`, the password you hashed in Step 4). Caddy then sets `psinix_session` on `.{domain}` (Secure, HttpOnly, SameSite=Lax, 30 days) and injects `X-Auth-User` toward psinode. Later requests to any `x-*` host — including the Peers panel’s calls to `x-peers` (`/connect`, `/graphql`) — send that cookie and are not prompted again.
+
+Two paths skip Caddy’s session check so they can reach psinode. Skipping Caddy authorizes nothing:
+
+| Request | Why it is open at Caddy | Who actually authorizes |
+|---------|-------------------------|-------------------------|
+| `GET https://x-peers.{domain}/p2p` | Foreign nodes handshake here; they have no operator cookie | psinode `checkP2PAuth` (`--p2p` / allow-list) |
+| `OPTIONS` on any `x-*` host | CORS preflight does not send credentials | psinode CORS (`Origin` must be `https://x-admin.{domain}`) |
+
+Apex `{domain}` and non-`x-*` service hosts (for example `transact.{domain}`) never get `X-Auth-User`.
+
+There is no `x-auth` portal. To force a new login, change `caddy_session_token` (Step 4) and rebuild (Step 9) — or wait out the 30-day cookie.
+
+Already running a node from an older revision of this repo? Add `caddy_session_token` to `secrets.yaml` before the next rebuild; activation fails closed if the key is missing.
+
 ## Day-2: changing secrets
 
 1. Edit with `nix shell nixpkgs#sops -c sops secrets.yaml` on your admin machine (Step 4).
 2. Stage/commit the updated `secrets.yaml` (Step 5).
 3. `nixos-rebuild switch ...` so the host picks up the new ciphertext (Step 9).
+
+Changing `caddy_session_token` logs everyone out of `x-*`. Changing `caddy_admin_hash` changes the password for the next basic-auth prompt; existing cookies stay valid until the token is rotated or they expire.
 
 ## Reference: how decryption works
 
