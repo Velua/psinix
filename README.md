@@ -4,12 +4,12 @@ Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed 
 
 Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash, Caddy session token) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
 
-This guide is a walkthrough: do the steps in order, top to bottom. Steps 1–5 happen on your admin machine before the first deploy; steps 6–9 cover identifying the disk and the deploy itself.
+This guide is a walkthrough: do the steps in order, top to bottom. Steps 1–5 happen on your admin machine before the first deploy; steps 6–9 cover identifying the disk and the deploy itself. From Step 6 on, commands use `$IPV4` — set that once before you start them.
 
 ## Prerequisites
 
 - [Nix](https://nixos.org/download/) with flakes on your admin machine — **NixOS is not required**; any Linux distro (or macOS, see below) with Nix installed works. Every tool below is invoked with `nix run` / `nix shell` — no permanent `sops`/`age` install needed, and the server never needs the `sops` CLI.
-- Your admin machine must be able to build `x86_64-linux` derivations. Any x86_64 Linux machine can. From macOS or an ARM machine, add `--build-on-remote` to the nixos-anywhere command (Step 7) and `--build-host root@**IPV4**` to nixos-rebuild (Step 9), or configure a remote builder.
+- Your admin machine must be able to build `x86_64-linux` derivations. Any x86_64 Linux machine can. From macOS or an ARM machine, add `--build-on-remote` to the nixos-anywhere command (Step 7) and `--build-host root@$IPV4` to nixos-rebuild (Step 9), or configure a remote builder.
 - **Windows:** Nix does not run natively, but WSL2 works. Install Nix inside WSL2 and do *everything* there: keep the repo on the WSL filesystem (not `/mnt/c/...`), generate/use the SSH key inside WSL (`~/.ssh/id_ed25519.pub` — that machine is what SSHes to the server), and the age key path in Step 2 refers to the WSL home directory. An x86 laptop under WSL2 counts as `x86_64-linux`, so no remote-build flags are needed.
 - A domain with DNS hosted on Cloudflare, and the ability to create an API token with **Zone → DNS → Edit**.
 - A target server you can SSH into that is running a live/installer image (the examples assume an Ubuntu image, hence `ubuntu@`; adjust the user if yours differs).
@@ -52,7 +52,7 @@ Then edit it, pasting your public key from Step 2:
 ```yaml
 # admin: your local age key (age-keygen → ~/.config/sops/age/keys.txt)
 # host:  from the server after first boot:
-#          ssh-keyscan -t ed25519 HOST | ssh-to-age
+#          ssh-keyscan -t ed25519 $IPV4 | ssh-to-age
 keys:
   - &admin age1...   # from age-keygen (Step 2)
   # - &host  age1...   # uncomment in Step 8
@@ -121,6 +121,14 @@ git commit -m "Add sops recipients and encrypted secrets"
 
 Safe to commit: encrypted `secrets.yaml`, public keys in `.sops.yaml`. Never commit: `~/.config/sops/age/keys.txt` (your private key).
 
+## Server address
+
+From here on, every command uses `$IPV4`. Set it once in this shell (this session only — keep the terminal open through Step 9, and export it again for later rebuilds):
+
+```bash
+export IPV4=203.0.113.10   # your server's public IPv4
+```
+
 ## Step 6 — Identify the target disk
 
 [Disko](https://github.com/nix-community/disko) does **not** auto-detect which disk to wipe — you must name it. Guessing wrong (e.g. assuming `/dev/xvda` on a host that uses `/dev/nvme0n1`) means the install fails or, worse, the wrong disk is reformatted. Do this on the **target server** before Step 7.
@@ -128,7 +136,7 @@ Safe to commit: encrypted `secrets.yaml`, public keys in `.sops.yaml`. Never com
 SSH in and list block devices:
 
 ```bash
-ssh ubuntu@**IPV4**
+ssh ubuntu@$IPV4
 lsblk -d -o NAME,SIZE,MODEL,TRAN,TYPE
 ```
 
@@ -166,7 +174,7 @@ git add disk-config.nix
 nix run github:nix-community/nixos-anywhere -- \
   --generate-hardware-config nixos-generate-config ./hardware-configuration.nix \
   --flake .#generic \
-  --target-host ubuntu@**IPV4**
+  --target-host ubuntu@$IPV4
 ```
 
 After this, the machine boots NixOS with a freshly generated SSH host key. Root login uses the public key you set in `configuration.nix` (`localSshKey`).
@@ -174,7 +182,7 @@ After this, the machine boots NixOS with a freshly generated SSH host key. Root 
 **SSH will refuse the connection** the next time you reach the host: OpenSSH still has the *old* (Ubuntu/live) host key in `~/.ssh/known_hosts`, and the new NixOS key does not match. Clear the stale entry, then accept the new key when prompted:
 
 ```bash
-ssh-keygen -R **IPV4**
+ssh-keygen -R "$IPV4"
 ```
 
 **Expect secrets to be broken at this point.** The server decrypts `secrets.yaml` with its SSH host key (that's the `host` recipient from Step 3), but that key didn't exist until just now — so the ciphertext isn't encrypted for it yet. Cloudflare/Caddy/SoftHSM won't work until you complete Steps 8–9.
@@ -185,7 +193,7 @@ Get the server's host key as an age recipient:
 
 ```bash
 nix shell nixpkgs#openssh nixpkgs#ssh-to-age -c sh -c \
-  'ssh-keyscan -t ed25519 **IPV4** | ssh-to-age'
+  "ssh-keyscan -t ed25519 \"$IPV4\" | ssh-to-age"
 ```
 
 Back in `.sops.yaml` (from Step 3), **uncomment** the `host` lines and paste the printed `age1...` value:
@@ -213,7 +221,7 @@ git add .sops.yaml secrets.yaml
 
 ```bash
 # on NixOS; elsewhere: nix shell nixpkgs#nixos-rebuild -c nixos-rebuild ...
-nixos-rebuild switch --flake .#generic --target-host "root@**IPV4**" --show-trace
+nixos-rebuild switch --flake .#generic --target-host "root@$IPV4" --show-trace
 ```
 
 The host can now decrypt secrets at activation, and Caddy/ddclient/SoftHSM come up for real.
