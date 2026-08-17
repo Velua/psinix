@@ -243,7 +243,9 @@ There is no `x-auth` portal. To force a new login, change `caddy_session_token` 
 
 Already running a node from an older revision of this repo? Add `caddy_session_token` to `secrets.yaml` before the next rebuild; activation fails closed if the key is missing.
 
-## Day-2: changing secrets
+## Day-2: 
+
+### Changing secrets
 
 1. Edit with `nix shell nixpkgs#sops -c sops secrets.yaml` on your admin machine (Step 4).
 2. Stage/commit the updated `secrets.yaml` (Step 5).
@@ -268,4 +270,12 @@ sops / age CLI                         sops-nix module (no sops binary needed)
 ~/.config/sops/age/keys.txt (private)  /etc/ssh/ssh_host_ed25519_key (decrypt)
 .sops.yaml (public recipients)         decrypts secrets.yaml at activation
 encrypts secrets.yaml          → /run/secrets/… + templates for Caddy/etc.
+```
+
+### Extracting secrets
+
+Rebooting a node might mean unlocking the SoftHSM device, which requires the SoftHSM pin. 
+
+```bash
+nix shell nixpkgs#sops -c sops -d --extract '["softhsm_pin"]' secrets.yaml
 ```
