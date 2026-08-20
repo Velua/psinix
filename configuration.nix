@@ -32,12 +32,12 @@ in {
     # Raw API token as stored in secrets.yaml
     secrets.cloudflare_token = {};
 
-    # Rendered into an env file for Caddy
+    # Rendered into an env file for lego (security.acme DNS-01).
     templates.cloudflare-env = {
-      owner = "caddy";
-      restartUnits = ["caddy.service"];
+      owner = "acme";
+      restartUnits = ["acme-${domain}.service"];
       content = ''
-        CLOUDFLARE_API_TOKEN=${config.sops.placeholder.cloudflare_token}
+        CLOUDFLARE_DNS_API_TOKEN=${config.sops.placeholder.cloudflare_token}
       '';
     };
 
@@ -102,23 +102,30 @@ in {
   };
 
   systemd.services.caddy.serviceConfig.EnvironmentFile = [
-    config.sops.templates.cloudflare-env.path
     config.sops.templates.caddy-admin-env.path
   ];
+
+  # Wildcard certs need DNS-01. Use NixOS ACME (lego) instead of
+  # caddy.withPlugins so flake lock updates do not require a vendor hash.
+  security.acme = {
+    acceptTerms = true;
+    defaults.email = cloudFlareEmail;
+    certs.${domain} = {
+      domain = domain;
+      extraDomainNames = ["*.${domain}"];
+      dnsProvider = "cloudflare";
+      dnsResolver = "1.1.1.1:53";
+      environmentFile = config.sops.templates.cloudflare-env.path;
+      group = "caddy";
+    };
+  };
 
   services.caddy = {
     enable = true;
 
-    email = cloudFlareEmail;
-    acmeCA = null;
     logFormat = ''
       level DEBUG
     '';
-
-    package = pkgs.caddy.withPlugins {
-      plugins = ["github.com/caddy-dns/cloudflare@v0.2.4"];
-      hash = "sha256-hEHgAG0F0ozHRAPuxEqLyTATBrE+pajeXDiSNwniorg=";
-    };
 
     # --- psibase routing (port of the Traefik routers/middlewares from
     # psibase-node-deployment) ---
@@ -126,10 +133,8 @@ in {
     # Root domain -> psinode. Strip client-supplied X-Auth-User so it can't
     # be spoofed (Traefik's "strip-auth-header" middleware).
     virtualHosts."${domain}" = {
+      useACMEHost = domain;
       extraConfig = ''
-        tls {
-          dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-        }
         header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
         reverse_proxy localhost:8090 {
           header_up -X-Auth-User
@@ -145,10 +150,8 @@ in {
     #   GET x-peers/p2p — node-to-node handshake (checkP2PAuth / --p2p)
     #   OPTIONS on x-*  — CORS preflight (no credentials)
     virtualHosts."*.${domain}" = {
+      useACMEHost = domain;
       extraConfig = ''
-        tls {
-          dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-        }
         header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 
         @xapps header_regexp xhost Host ^x-[^.]+[.]${domainRe}$

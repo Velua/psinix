@@ -70,7 +70,7 @@ Four secrets are needed. Gather the values first:
 
 | Secret | Used by | How to obtain |
 |--------|---------|----------------|
-| `cloudflare_token` | Caddy DNS-01 TLS + ddclient | Cloudflare API token with **Zone → DNS → Edit** |
+| `cloudflare_token` | ACME DNS-01 TLS (lego) + ddclient | Cloudflare API token with **Zone → DNS → Edit** |
 | `softhsm_pin` | SoftHSM unlock for psibase | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
 | `caddy_admin_hash` | HTTP basic auth login on `x-*` | `nix run nixpkgs#caddy -- hash-password` — see note below |
 | `caddy_session_token` | Parent-domain session cookie for all `x-*` hosts | `nix run nixpkgs#openssl -- rand -hex 32` — hex only; see note below |
