@@ -9,7 +9,10 @@
   domain = "example.com"; # your domain (Cloudflare DNS)
   domainRe = lib.escapeRegex domain;
   cloudFlareEmail = "you@example.com"; # Cloudflare account email (ACME)
-  localSshKey = "ssh-ed25519 AAAA... comment"; # your laptop's public key → root login
+  localSshKey = [
+    "ssh-ed25519 AAAA... comment" # your laptop's public key → root login
+  ];
+  producer = null; # block producer name (psinode --producer); null = non-producing node
 in {
   imports = [
     (modulesPath + "/installer/scan/not-detected.nix")
@@ -80,8 +83,8 @@ in {
     listen = 8090;
     # openFirewall not needed: only Caddy talks to psinode on loopback.
 
-    # Match docker PRODUCER_NAME / first-run -p. Change if your chain uses another name.
-    producer = "a";
+    # Match docker PRODUCER_NAME / first-run -p. Null = non-producing node (module default).
+    producer = producer;
     p2p = true;
     databaseCacheSize = "2GiB";
     # Default psinode timeout is ~4s; push_boot (~9MB) over high-latency paths
@@ -244,9 +247,7 @@ in {
   };
 
   users.users.root.openssh.authorizedKeys.keys =
-    [
-      localSshKey
-    ]
+    localSshKey
     ++ (args.extraPublicKeys or []); # this is used for unit-testing this module and can be removed if not needed
 
   system.stateVersion = "24.05";
