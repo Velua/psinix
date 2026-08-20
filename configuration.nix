@@ -35,7 +35,7 @@ in {
     # Rendered into an env file for lego (security.acme DNS-01).
     templates.cloudflare-env = {
       owner = "acme";
-      restartUnits = ["acme-${domain}.service"];
+      restartUnits = ["acme-order-renew-${domain}.service"];
       content = ''
         CLOUDFLARE_DNS_API_TOKEN=${config.sops.placeholder.cloudflare_token}
       '';
@@ -104,6 +104,13 @@ in {
   systemd.services.caddy.serviceConfig.EnvironmentFile = [
     config.sops.templates.caddy-admin-env.path
   ];
+
+  # ACME reads EnvironmentFile= at spawn. If sops has not rendered it yet,
+  # the unit fails with "Failed to load environment files" and stays dead.
+  systemd.services."acme-order-renew-${domain}" = {
+    after = ["sops-install-secrets.service"];
+    wants = ["sops-install-secrets.service"];
+  };
 
   # Wildcard certs need DNS-01. Use NixOS ACME (lego) instead of
   # caddy.withPlugins so flake lock updates do not require a vendor hash.
