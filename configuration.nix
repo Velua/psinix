@@ -29,6 +29,9 @@ in {
 
   sops = {
     defaultSopsFile = ./secrets.yaml;
+    # Activation-script install runs in initrd, before ssh host keys exist.
+    # A real unit is what After=sops-install-secrets.service can wait on.
+    useSystemdActivation = true;
     # Age key paths for Sops on the remote host
     age.sshKeyPaths = ["/etc/ssh/ssh_host_ed25519_key"];
 
@@ -104,12 +107,22 @@ in {
     };
   };
 
-  systemd.services.caddy.serviceConfig.EnvironmentFile = [
-    config.sops.templates.caddy-admin-env.path
-  ];
+  systemd.services.caddy = {
+    after = ["sops-install-secrets.service"];
+    wants = ["sops-install-secrets.service"];
+    serviceConfig.EnvironmentFile = [
+      config.sops.templates.caddy-admin-env.path
+    ];
+  };
 
   # ACME reads EnvironmentFile= at spawn. If sops has not rendered it yet,
   # the unit fails with "Failed to load environment files" and stays dead.
+  # The path unit starts issuance once the Cloudflare env file appears
+  # (first boot: host keys → sops → env file, after ACME already failed).
+  systemd.paths."acme-order-renew-${domain}" = {
+    wantedBy = ["multi-user.target"];
+    pathConfig.PathExists = config.sops.templates.cloudflare-env.path;
+  };
   systemd.services."acme-order-renew-${domain}" = {
     after = ["sops-install-secrets.service"];
     wants = ["sops-install-secrets.service"];
@@ -127,6 +140,7 @@ in {
       dnsResolver = "1.1.1.1:53";
       environmentFile = config.sops.templates.cloudflare-env.path;
       group = "caddy";
+      reloadServices = ["caddy"];
     };
   };
 
