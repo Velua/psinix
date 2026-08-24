@@ -241,8 +241,6 @@ Apex `{domain}` and non-`x-*` service hosts (for example `transact.{domain}`) ne
 
 There is no `x-auth` portal. To force a new login, change `caddy_session_token` (Step 4) and rebuild (Step 9) — or wait out the 30-day cookie.
 
-Already running a node from an older revision of this repo? Add `caddy_session_token` to `secrets.yaml` before the next rebuild; activation fails closed if the key is missing.
-
 ## Day-2: 
 
 ### Changing secrets
