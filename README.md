@@ -1,6 +1,6 @@
 # PsiNix
 
-Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed to a remote server with [nixos-anywhere](https://github.com/nix-community/nixos-anywhere).
+Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed to a remote server with [nixos-anywhere](https://github.com/nix-community/nixos-anywhere). The node module is [psibase-nix](https://github.com/gofractally/psibase-nix). This flake overrides that repo’s locked runtime tarball (`inputs.psibase` + `follows`) so a new cut is `nix flake update psibase`.
 
 Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash, Caddy session token) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
 

@@ -6,18 +6,24 @@
   inputs.sops-nix.url = "github:Mic92/sops-nix";
   inputs.sops-nix.inputs.nixpkgs.follows = "nixpkgs";
 
-  # Until the nix module lands on main: PR #1953
-  inputs.psibase.url = "github:gofractally/psibase?ref=refs/pull/1953/head";
+  inputs.psibase-nix.url = "github:gofractally/psibase-nix";
+  inputs.psibase-nix.inputs.nixpkgs.follows = "nixpkgs";
+  # Override psibase-nix's locked tarball. Change this URL, then
+  # `nix flake update psibase` — no psibase-nix commit.
+  inputs.psibase = {
+    url = "https://github.com/gofractally/psibase/releases/download/v0.27.0-pre/psidk-ubuntu-2404.tar.gz";
+    flake = false;
+  };
+  inputs.psibase-nix.inputs.psibase.follows = "psibase";
 
   outputs = {
     nixpkgs,
     disko,
     sops-nix,
     nixpkgs-unstable,
-    psibase,
+    psibase-nix,
     ...
   }: {
-
     nixosConfigurations.generic = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       specialArgs = {
@@ -26,7 +32,7 @@
       modules = [
         disko.nixosModules.disko
         sops-nix.nixosModules.sops
-        psibase.nixosModules.psibase
+        psibase-nix.nixosModules.psibase
         ./configuration.nix
         ./hardware-configuration.nix
       ];

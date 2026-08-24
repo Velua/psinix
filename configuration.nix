@@ -76,7 +76,7 @@ in {
   networking.firewall.allowedTCPPorts = [80 443];
   networking.firewall.allowedUDPPorts = [];
 
-  # Psibase node (package + module from inputs.psibase).
+  # Module from psibase-nix; runtime bits from inputs.psibase (overrides that lock).
   # Feature parity with psibase-node-deployment docker compose:
   #   producer, p2p, database cache, SoftHSM PKCS#11, reverse-proxy admin auth.
   # Caddy reverse_proxies **domain** / *.**domain** -> localhost:8090.
