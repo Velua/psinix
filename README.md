@@ -2,7 +2,9 @@
 
 Run a [psibase](https://github.com/gofractally/psibase) node on NixOS, deployed to a remote server with [nixos-anywhere](https://github.com/nix-community/nixos-anywhere). The node module is [psibase-nix](https://github.com/gofractally/psibase-nix). This flake overrides that repo’s locked runtime tarball (`inputs.psibase` + `follows`) so a new cut is `nix flake update psibase`.
 
-Secrets (Cloudflare API token, SoftHSM PIN, Caddy admin password hash, Caddy session token) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
+This tree expects **psinode 0.28+** for `--passphrase-file` ([psibase#2017](https://github.com/gofractally/psibase/pull/2017)): SoftHSM PINs persist across restarts. The flake lock still pins 0.27 until `v0.28.0-pre` is published; `nix flake update psibase` will fail until then, and this revision should not be deployed onto 0.27 (`--passphrase-file` is an unknown option).
+
+Secrets (Cloudflare API token, SoftHSM PIN, psinode passphrase, Caddy admin password hash, Caddy session token) are encrypted with [SOPS](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age) and decrypted on the host by [sops-nix](https://github.com/Mic92/sops-nix).
 
 This guide is a walkthrough: do the steps in order, top to bottom. Steps 1–5 happen on your admin machine before the first deploy; steps 6–9 cover identifying the disk and the deploy itself. From Step 6 on, commands use `$IPV4` — set that once before you start them.
 
@@ -66,15 +68,18 @@ creation_rules:
 
 ## Step 4 — Create and encrypt `secrets.yaml`
 
-Four secrets are needed. Gather the values first:
+Five secrets are needed. Gather the values first:
 
 | Secret | Used by | How to obtain |
 |--------|---------|----------------|
 | `cloudflare_token` | ACME DNS-01 TLS (lego) + ddclient | Cloudflare API token with **Zone → DNS → Edit** |
-| `softhsm_pin` | SoftHSM unlock for psibase | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
+| `softhsm_pin` | SoftHSM token init, and the one-time x-admin unlock | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
+| `psibase_passphrase` | psinode `--passphrase-file`: encrypts stored SoftHSM PINs so they survive restart | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 32` — see note below |
 | `caddy_admin_hash` | HTTP basic auth login on `x-*` | `nix run nixpkgs#caddy -- hash-password` — see note below |
 | `caddy_session_token` | Parent-domain session cookie for all `x-*` hosts | `nix run nixpkgs#openssl -- rand -hex 32` — hex only; see note below |
 
+> **Note on `softhsm_pin` vs `psibase_passphrase`:** They are different secrets. The PIN initializes (and first-unlocks) the PKCS #11 token. The passphrase is psinode's master key for `/var/lib/psibase/db/secrets` ([psibase#2017](https://github.com/gofractally/psibase/pull/2017), 0.28+). After you unlock the device once in x-admin, psinode stores the PIN there and unlocks again on every start while the token is still present. Locking the device in x-admin forgets the stored PIN. Rotating the passphrase cannot decrypt an existing `db/secrets` file — psinode will refuse to start until you remove that file and unlock again.
+>
 > **Note on `caddy_admin_hash`:** `caddy hash-password` does not generate a password for you — it prompts you to type one in. Pick (and save, e.g. in your password manager) any strong password **of your own choosing**; that password is what you'll enter at the basic-auth prompt on the first `x-*` visit (username `admin`). Only the resulting bcrypt hash goes into `secrets.yaml`.
 >
 > **Note on `caddy_session_token`:** After that prompt, Caddy sets an `HttpOnly` cookie `psinix_session` on `.{domain}` so the same login applies to every `x-*` host (the Peers panel on `x-admin` calls `x-peers` from the browser). Use `openssl rand -hex 32` — the Caddy matcher treats the value as a regex, so hex keeps it literal. Rotating this token and rebuilding invalidates every existing session.
@@ -85,6 +90,7 @@ Create the file in plaintext with your real values, then encrypt it in place (en
 cat > secrets.yaml <<'EOF'
 cloudflare_token: cf_xxx...
 softhsm_pin: PIN_GOES_HERE
+psibase_passphrase: PASSPHRASE_GOES_HERE
 caddy_admin_hash: HASH_GOES_HERE
 caddy_session_token: TOKEN_GOES_HERE
 EOF
@@ -226,6 +232,8 @@ nixos-rebuild switch --flake .#generic --target-host "root@$IPV4" --show-trace
 
 The host can now decrypt secrets at activation, and Caddy/ddclient/SoftHSM come up for real.
 
+If this node produces blocks, unlock the SoftHSM token once in `https://x-admin.{domain}` (Keys). With `psibase_passphrase` set, later `psinode` restarts unlock it automatically.
+
 ## Admin login (`x-*`)
 
 Visit `https://x-admin.{domain}`. The browser prompts once for HTTP basic auth (username `admin`, the password you hashed in Step 4). Caddy then sets `psinix_session` on `.{domain}` (Secure, HttpOnly, SameSite=Lax, 30 days) and injects `X-Auth-User` toward psinode. Later requests to any `x-*` host — including the Peers panel’s calls to `x-peers` (`/connect`, `/graphql`) — send that cookie and are not prompted again.
@@ -251,6 +259,10 @@ There is no `x-auth` portal. To force a new login, change `caddy_session_token` 
 
 Changing `caddy_session_token` logs everyone out of `x-*`. Changing `caddy_admin_hash` changes the password for the next basic-auth prompt; existing cookies stay valid until the token is rotated or they expire.
 
+Changing `psibase_passphrase` cannot decrypt `/var/lib/psibase/db/secrets`. psinode aborts on start until that file is removed (`rm /var/lib/psibase/db/secrets`) and the SoftHSM token is unlocked again in x-admin. Changing `softhsm_pin` after the token already exists does **not** re-init SoftHSM; the token still has the old PIN.
+
+Already running a node from an older revision of this repo? Add `psibase_passphrase` to `secrets.yaml` before the next rebuild (activation fails closed if the key is missing), then unlock the device once in x-admin.
+
 ## Reference: how decryption works
 
 On the host, sops-nix is configured with:
@@ -272,8 +284,9 @@ encrypts secrets.yaml          → /run/secrets/… + templates for Caddy/etc.
 
 ### Extracting secrets
 
-Rebooting a node might mean unlocking the SoftHSM device, which requires the SoftHSM pin. 
+The SoftHSM PIN is still needed for the first x-admin unlock (and if you lock the device or rotate the passphrase). Reboots do not require it when `psibase_passphrase` is set and the token was left unlocked.
 
 ```bash
 nix shell nixpkgs#sops -c sops -d --extract '["softhsm_pin"]' secrets.yaml
+nix shell nixpkgs#sops -c sops -d --extract '["psibase_passphrase"]' secrets.yaml
 ```

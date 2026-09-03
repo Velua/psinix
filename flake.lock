@@ -55,14 +55,14 @@
     "psibase": {
       "flake": false,
       "locked": {
-        "lastModified": 1787178783,
-        "narHash": "sha256-OXfcJ9PnWhVGI3ORn/dGXqx4voSzVq+0HAqpihQLBKY=",
+        "lastModified": 1788454948,
+        "narHash": "sha256-ypMZJRw+U2i2e6bm5ypo/it3tQOJtoW2V3aZ/P50jQY=",
         "type": "tarball",
-        "url": "https://github.com/gofractally/psibase/releases/download/v0.27.0-pre/psidk-ubuntu-2404.tar.gz"
+        "url": "https://github.com/gofractally/psibase/releases/download/v0.28.0-pre/psidk-ubuntu-2404.tar.gz"
       },
       "original": {
         "type": "tarball",
-        "url": "https://github.com/gofractally/psibase/releases/download/v0.27.0-pre/psidk-ubuntu-2404.tar.gz"
+        "url": "https://github.com/gofractally/psibase/releases/download/v0.28.0-pre/psidk-ubuntu-2404.tar.gz"
       }
     },
     "psibase-nix": {

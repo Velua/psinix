@@ -61,8 +61,16 @@ in {
       '';
     };
 
-    # SoftHSM user/SO PIN (softhsm2-util --init-token). Unlock after restart via x-admin.
+    # SoftHSM user/SO PIN (softhsm2-util --init-token). Also the PIN typed
+    # once in x-admin; psinode then stores it in db/secrets (0.28+).
     secrets.softhsm_pin = {
+      restartUnits = ["psibase.service"];
+    };
+
+    # Master passphrase for psinode `--passphrase-file` (psibase#2017).
+    # Encrypts /var/lib/psibase/db/secrets. Distinct from softhsm_pin:
+    # rotating this cannot decrypt an existing secrets file.
+    secrets.psibase_passphrase = {
       restartUnits = ["psibase.service"];
     };
   };
@@ -100,6 +108,17 @@ in {
       tokenLabel = "psibase production SoftHSM";
     };
 
+    # 0.28+: persist PKCS#11 PINs across psinode restarts (psibase#2017).
+    # LoadCredential copies the sops file into the unit credentials dir,
+    # which the sandboxed psibase user can read. extraArgs cannot use
+    # systemd `%d` — the module shell-quotes ExecStart. First unlock still
+    # happens in x-admin; later restarts auto-unlock while the token is
+    # present.
+    extraArgs = [
+      "--passphrase-file"
+      "/run/credentials/psibase.service/psibase-passphrase"
+    ];
+
     # Caddy sets X-Auth-User on x-* after the parent-domain session (or the
     # first basic-auth prompt that issues it). Traefik admin-auth equivalent.
     environment = {
@@ -113,6 +132,20 @@ in {
     serviceConfig.EnvironmentFile = [
       config.sops.templates.caddy-admin-env.path
     ];
+  };
+
+  # LoadCredential reads the sops file at spawn. Wait for it, and copy it
+  # into the unit credentials dir (the path in extraArgs).
+  systemd.services.psibase = {
+    after = ["sops-install-secrets.service"];
+    wants = ["sops-install-secrets.service"];
+    serviceConfig.LoadCredential = [
+      "psibase-passphrase:${config.sops.secrets.psibase_passphrase.path}"
+    ];
+  };
+  systemd.services.psibase-softhsm-init = {
+    after = ["sops-install-secrets.service"];
+    wants = ["sops-install-secrets.service"];
   };
 
   # ACME reads EnvironmentFile= at spawn. If sops has not rendered it yet,
