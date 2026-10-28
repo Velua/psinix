@@ -13,7 +13,7 @@
   # 0.28 adds `--passphrase-file` (psibase#2017). The lock still points at
   # 0.27 until that tarball is published; then update the input.
   inputs.psibase = {
-    url = "https://github.com/gofractally/psibase/releases/download/v0.28.0-pre/psidk-ubuntu-2404.tar.gz";
+    url = "https://github.com/gofractally/psibase/releases/download/v0.29.0-pre/psidk-ubuntu-2404.tar.gz";
     flake = false;
   };
   inputs.psibase-nix.inputs.psibase.follows = "psibase";
