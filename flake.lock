@@ -55,14 +55,14 @@
     "psibase": {
       "flake": false,
       "locked": {
-        "lastModified": 1788454948,
-        "narHash": "sha256-ypMZJRw+U2i2e6bm5ypo/it3tQOJtoW2V3aZ/P50jQY=",
+        "lastModified": 1788812688,
+        "narHash": "sha256-k/KxDuh9Vx2KtfC2Es/emvxfpOEETne1Liub4sqJCiY=",
         "type": "tarball",
-        "url": "https://github.com/gofractally/psibase/releases/download/v0.28.0-pre/psidk-ubuntu-2404.tar.gz"
+        "url": "https://github.com/gofractally/psibase/releases/download/v0.29.0-pre/psidk-ubuntu-2404.tar.gz"
       },
       "original": {
         "type": "tarball",
-        "url": "https://github.com/gofractally/psibase/releases/download/v0.28.0-pre/psidk-ubuntu-2404.tar.gz"
+        "url": "https://github.com/gofractally/psibase/releases/download/v0.29.0-pre/psidk-ubuntu-2404.tar.gz"
       }
     },
     "psibase-nix": {
@@ -75,11 +75,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787542967,
-        "narHash": "sha256-J1/vBamIjB+dDc5KsiHP9+ALrMlOpeD6z7omJ3qH2Hw=",
+        "lastModified": 1787546862,
+        "narHash": "sha256-VVzHWq8QRWlChOIkcVIkSkkmERwxKZ8+MRjxljqehUs=",
         "owner": "gofractally",
         "repo": "psibase-nix",
-        "rev": "4bd106f24edbd7cf1441c7576d1187eaff83f318",
+        "rev": "47880320b7835c2aae31082a0fac598057ff4b8d",
         "type": "github"
       },
       "original": {

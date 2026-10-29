@@ -75,14 +75,14 @@ Five secrets are needed. Gather the values first:
 | `cloudflare_token` | ACME DNS-01 TLS (lego) + ddclient | Cloudflare API token with **Zone → DNS → Edit** |
 | `softhsm_pin` | SoftHSM token init, and the one-time x-admin unlock | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 18` |
 | `psibase_passphrase` | psinode `--passphrase-file`: encrypts stored SoftHSM PINs so they survive restart | Any random string, e.g. `nix run nixpkgs#openssl -- rand -base64 32` — see note below |
-| `caddy_admin_hash` | HTTP basic auth login on `x-*` | `nix run nixpkgs#caddy -- hash-password` — see note below |
-| `caddy_session_token` | Parent-domain session cookie for all `x-*` hosts | `nix run nixpkgs#openssl -- rand -hex 32` — hex only; see note below |
+| `caddy_admin_hash` | HTTP basic auth login on `x-admin` | `nix run nixpkgs#caddy -- hash-password` — see note below |
+| `caddy_session_token` | Session cookie for `x-admin` (skips later basic-auth prompts) | `nix run nixpkgs#openssl -- rand -hex 32` — hex only; see note below |
 
 > **Note on `softhsm_pin` vs `psibase_passphrase`:** They are different secrets. The PIN initializes (and first-unlocks) the PKCS #11 token. The passphrase is psinode's master key for `/var/lib/psibase/db/secrets` ([psibase#2017](https://github.com/gofractally/psibase/pull/2017), 0.28+). After you unlock the device once in x-admin, psinode stores the PIN there and unlocks again on every start while the token is still present. Locking the device in x-admin forgets the stored PIN. Rotating the passphrase cannot decrypt an existing `db/secrets` file — psinode will refuse to start until you remove that file and unlock again.
 >
-> **Note on `caddy_admin_hash`:** `caddy hash-password` does not generate a password for you — it prompts you to type one in. Pick (and save, e.g. in your password manager) any strong password **of your own choosing**; that password is what you'll enter at the basic-auth prompt on the first `x-*` visit (username `admin`). Only the resulting bcrypt hash goes into `secrets.yaml`.
+> **Note on `caddy_admin_hash`:** `caddy hash-password` does not generate a password for you — it prompts you to type one in. Pick (and save, e.g. in your password manager) any strong password **of your own choosing**; that password is what you'll enter at the basic-auth prompt on the first `x-admin` visit (username `admin`). Only the resulting bcrypt hash goes into `secrets.yaml`.
 >
-> **Note on `caddy_session_token`:** After that prompt, Caddy sets an `HttpOnly` cookie `psinix_session` on `.{domain}` so the same login applies to every `x-*` host (the Peers panel on `x-admin` calls `x-peers` from the browser). Use `openssl rand -hex 32` — the Caddy matcher treats the value as a regex, so hex keeps it literal. Rotating this token and rebuilding invalidates every existing session.
+> **Note on `caddy_session_token`:** After that prompt, Caddy sets an `HttpOnly` cookie `psinix_session` on `.{domain}` so later `x-admin` visits within 30 days skip the basic-auth prompt. Other `x-*` local-service hosts are not gated by Caddy Basic. Use `openssl rand -hex 32` — the Caddy matcher treats the value as a regex, so hex keeps it literal. Rotating this token and rebuilding invalidates every existing session.
 
 Create the file in plaintext with your real values, then encrypt it in place (encryption uses the recipients in `.sops.yaml` — currently just `admin`):
 
@@ -234,16 +234,18 @@ The host can now decrypt secrets at activation, and Caddy/ddclient/SoftHSM come 
 
 If this node produces blocks, unlock the SoftHSM token once in `https://x-admin.{domain}` (Keys). With `psibase_passphrase` set, later `psinode` restarts unlock it automatically.
 
-## Admin login (`x-*`)
+## Admin login (`x-admin`)
 
-Visit `https://x-admin.{domain}`. The browser prompts once for HTTP basic auth (username `admin`, the password you hashed in Step 4). Caddy then sets `psinix_session` on `.{domain}` (Secure, HttpOnly, SameSite=Lax, 30 days) and injects `X-Auth-User` toward psinode. Later requests to any `x-*` host — including the Peers panel’s calls to `x-peers` (`/connect`, `/graphql`) — send that cookie and are not prompted again.
+Visit `https://x-admin.{domain}`. The browser prompts once for HTTP basic auth (username `admin`, the password you hashed in Step 4). Caddy then sets `psinix_session` on `.{domain}` (Secure, HttpOnly, SameSite=Lax, 30 days) and injects `X-Auth-User` toward psinode. Later requests to `x-admin` that send that cookie are not prompted again.
 
-Two paths skip Caddy’s session check so they can reach psinode. Skipping Caddy authorizes nothing:
+Other `x-*` local-service hosts are **not** behind Caddy Basic. They proxy to psinode like network apps so browser callers reach the app. App-level auth still applies.
+
+Paths that skip Caddy’s admin gate so they can reach psinode. Skipping Caddy authorizes nothing:
 
 | Request | Why it is open at Caddy | Who actually authorizes |
 |---------|-------------------------|-------------------------|
-| `GET https://x-peers.{domain}/p2p` | Foreign nodes handshake here; they have no operator cookie | psinode `checkP2PAuth` (`--p2p` / allow-list) |
-| `OPTIONS` on any `x-*` host | CORS preflight does not send credentials | psinode CORS (`Origin` must be `https://x-admin.{domain}`) |
+| `OPTIONS` on `x-admin` | CORS preflight does not send credentials | psinode CORS |
+| Other `x-*` hosts (e.g. `x-peers`, `x-http`) | Local services must be browser-reachable | App / psinode (e.g. `checkP2PAuth` on `GET /p2p`) |
 
 Apex `{domain}` and non-`x-*` service hosts (for example `transact.{domain}`) never get `X-Auth-User`.
 
@@ -257,7 +259,7 @@ There is no `x-auth` portal. To force a new login, change `caddy_session_token` 
 2. Stage/commit the updated `secrets.yaml` (Step 5).
 3. `nixos-rebuild switch ...` so the host picks up the new ciphertext (Step 9).
 
-Changing `caddy_session_token` logs everyone out of `x-*`. Changing `caddy_admin_hash` changes the password for the next basic-auth prompt; existing cookies stay valid until the token is rotated or they expire.
+Changing `caddy_session_token` logs everyone out of `x-admin`. Changing `caddy_admin_hash` changes the password for the next basic-auth prompt; existing cookies stay valid until the token is rotated or they expire.
 
 Changing `psibase_passphrase` cannot decrypt `/var/lib/psibase/db/secrets`. psinode aborts on start until that file is removed (`rm /var/lib/psibase/db/secrets`) and the SoftHSM token is unlocked again in x-admin. Changing `softhsm_pin` after the token already exists does **not** re-init SoftHSM; the token still has the old PIN.
 

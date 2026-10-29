@@ -7,7 +7,6 @@
   ...
 } @ args: let
   domain = "example.com"; # your domain (Cloudflare DNS)
-  domainRe = lib.escapeRegex domain;
   cloudFlareEmail = "you@example.com"; # Cloudflare account email (ACME)
   localSshKey = [
     "ssh-ed25519 AAAA... comment" # your laptop's public key → root login
@@ -47,9 +46,9 @@ in {
       '';
     };
 
-    # bcrypt hash for the x-* admin login prompt (generate with: caddy hash-password)
+    # bcrypt hash for the x-admin login prompt (generate with: caddy hash-password)
     secrets.caddy_admin_hash = {};
-    # Hex token for the parent-domain session cookie (openssl rand -hex 32).
+    # Hex token for the x-admin session cookie (openssl rand -hex 32).
     secrets.caddy_session_token = {};
 
     templates.caddy-admin-env = {
@@ -119,8 +118,9 @@ in {
       "/run/credentials/psibase.service/psibase-passphrase"
     ];
 
-    # Caddy sets X-Auth-User on x-* after the parent-domain session (or the
-    # first basic-auth prompt that issues it). Traefik admin-auth equivalent.
+    # Caddy sets X-Auth-User on x-admin after the session cookie (or the
+    # first basic-auth prompt that issues it). Traefik admin-auth
+    # equivalent for the operator UI only. Other x-* hosts are not gated.
     environment = {
       PSIBASE_USERNAME_FIELD = "X-Auth-User";
     };
@@ -199,37 +199,25 @@ in {
       '';
     };
 
-    # Wildcard: x-* admin surfaces share one parent-domain session cookie
-    # (set after a single basic-auth prompt). The Peers panel fetches
-    # x-peers with credentials: include; a per-host Authorization header
-    # would not be sent. psinode still authorizes via X-Auth-User.
-    # Not gated here (psinode checks these itself):
-    #   GET x-peers/p2p — node-to-node handshake (checkP2PAuth / --p2p)
-    #   OPTIONS on x-*  — CORS preflight (no credentials)
+    # Wildcard: only x-admin is gated (basic auth + session cookie that
+    # skips the prompt on later visits). psinode still authorizes via
+    # X-Auth-User on that host. Every other x-* local service proxies
+    # like a network app so browser callers reach app-level auth.
+    # OPTIONS on x-admin skips the gate (CORS preflight sends no
+    # credentials); psinode CORS still decides the reply.
     virtualHosts."*.${domain}" = {
       useACMEHost = domain;
       extraConfig = ''
         header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 
-        @xapps header_regexp xhost Host ^x-[^.]+[.]${domainRe}$
-        @xpeersP2p {
-          host x-peers.${domain}
-          path /p2p
-          method GET
-        }
+        @xadmin host x-admin.${domain}
         @xpreflight {
-          header_regexp xhost Host ^x-[^.]+[.]${domainRe}$
+          host x-admin.${domain}
           method OPTIONS
         }
         @xsession {
-          header_regexp xhost Host ^x-[^.]+[.]${domainRe}$
+          host x-admin.${domain}
           header_regexp Cookie `(?:^|;\s*)psinix_session={$CADDY_SESSION_TOKEN}(?:;|$)`
-        }
-
-        handle @xpeersP2p {
-          reverse_proxy localhost:8090 {
-            header_up -X-Auth-User
-          }
         }
 
         handle @xpreflight {
@@ -244,7 +232,7 @@ in {
           }
         }
 
-        handle @xapps {
+        handle @xadmin {
           basic_auth {
             admin {$CADDY_ADMIN_HASH}
           }
